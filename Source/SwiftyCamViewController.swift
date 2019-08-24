@@ -196,6 +196,10 @@ open class SwiftyCamViewController: UIViewController {
 
     public let session                           = AVCaptureSession()
 
+    // Completion handler storage
+    
+    fileprivate var onPhotoCaptureComplete: ((Bool) -> ())?    = nil
+    
     /// Serial queue used for setting up session
 
     fileprivate let sessionQueue                 = DispatchQueue(label: "session queue", attributes: [])
@@ -257,7 +261,7 @@ open class SwiftyCamViewController: UIViewController {
 
     /// Photo File Output variable
 
-    fileprivate var photoFileOutput              : AVCaptureStillImageOutput?
+    fileprivate var photoFileOutput              : AVCapturePhotoOutput?
 
     /// Video Device variable
 
@@ -353,10 +357,10 @@ open class SwiftyCamViewController: UIViewController {
                 self.sessionQueue.resume()
             })
         default:
-
             // already been asked. Denied access
             setupResult = .notAuthorized
         }
+        // Configure scene
         sessionQueue.async { [unowned self] in
             self.configureSession()
         }
@@ -523,6 +527,38 @@ extension SwiftyCamViewController {
 }
 
 
+// MARK : Capturing Photo
+extension SwiftyCamViewController : AVCapturePhotoCaptureDelegate {
+    
+    public func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
+        
+        if error != nil {
+            print("[SwiftyCam]: Photo Processing Failed with error \(error!)")
+            if let callback = self.onPhotoCaptureComplete {
+                callback(false)
+            }
+        }
+        
+        if let data = photo.fileDataRepresentation() {
+            let image = self.processPhoto(data)
+            // Call delegate and return new image
+            DispatchQueue.main.async {
+                self.cameraDelegate?.swiftyCam(self, didTake: image)
+                if let callback = self.onPhotoCaptureComplete {
+                    callback(true)
+                }
+            }
+        } else {
+            print("[SwiftyCam]: Failed to get data from processed photo.")
+            DispatchQueue.main.async {
+                if let callback = self.onPhotoCaptureComplete {
+                    callback(false)
+                }
+            }
+        }
+    }
+}
+
 extension SwiftyCamViewController : SwiftyCamButtonDelegate {
 
     /// Sets the maximum duration of the SwiftyCamButton
@@ -566,9 +602,14 @@ extension SwiftyCamViewController {
             return
         }
         
+        guard photoFileOutput != nil else {
+            print("[SwiftyCam]: photoFileOutput must be set before taking photo")
+            return
+        }
+        
         if device.hasFlash == true && flashEnabled == true /* TODO: Add Support for Retina Flash and add front flash */ {
-            changeFlashSettings(device: device, mode: .on)
-            capturePhotoAsyncronously(completionHandler: { (_) in })
+            self.onPhotoCaptureComplete = { (_) in }
+            capturePhotoAsyncronously()
             
         } else if device.hasFlash == false && flashEnabled == true && currentCamera == .front {
             flashView = UIView(frame: view.frame)
@@ -580,19 +621,18 @@ extension SwiftyCamViewController {
                 self.flashView?.alpha = 1.0
                 
             }, completion: { (_) in
-                self.capturePhotoAsyncronously(completionHandler: { (success) in
+                self.onPhotoCaptureComplete = { (success) in
                     UIView.animate(withDuration: 0.1, delay: 0.0, options: .curveEaseInOut, animations: {
                         self.flashView?.alpha = 0.0
                     }, completion: { (_) in
                         self.flashView?.removeFromSuperview()
                     })
-                })
+                }
+                self.capturePhotoAsyncronously()
             })
         } else {
-            if device.isFlashActive == true {
-                changeFlashSettings(device: device, mode: .off)
-            }
-            capturePhotoAsyncronously(completionHandler: { (_) in })
+            self.onPhotoCaptureComplete = { (_) in }
+            capturePhotoAsyncronously()
         }
     }
     
@@ -868,13 +908,32 @@ extension SwiftyCamViewController {
     
     /// Configure Photo Output
     fileprivate func configurePhotoOutput() {
-        let photoFileOutput = AVCaptureStillImageOutput()
+        let photoFileOutput = AVCapturePhotoOutput()// AVCaptureStillImageOutput()
         
         if self.session.canAddOutput(photoFileOutput) {
-            photoFileOutput.outputSettings  = [AVVideoCodecKey: AVVideoCodecJPEG]
+            print("[SwiftyCam]: Setting Up photo scene")
+            
+            // settings
+            photoFileOutput.isLivePhotoCaptureEnabled = false
+            photoFileOutput.isHighResolutionCaptureEnabled = true
+            photoFileOutput.photoSettingsForSceneMonitoring = self.settingsForPhoto()
             self.session.addOutput(photoFileOutput)
             self.photoFileOutput = photoFileOutput
         }
+    }
+    
+    fileprivate func settingsForPhoto() -> AVCapturePhotoSettings {
+        let photoCaptureSettings = AVCapturePhotoSettings()
+        // enable StillImageStabilization, TODO: may make this an option going forward.
+        photoCaptureSettings.isAutoStillImageStabilizationEnabled = true
+        photoCaptureSettings.isHighResolutionPhotoEnabled = true
+        if (flashEnabled) {
+            photoCaptureSettings.flashMode = .auto
+        } else {
+            photoCaptureSettings.flashMode = .off
+        }
+        
+        return photoCaptureSettings
     }
     
     fileprivate func processPhoto(_ imageData: Data) -> UIImage {
@@ -888,31 +947,19 @@ extension SwiftyCamViewController {
         return image
     }
     
-    fileprivate func capturePhotoAsyncronously(completionHandler: @escaping(Bool) -> ()) {
+    fileprivate func capturePhotoAsyncronously() {
         
         guard sessionRunning == true else {
             print("[SwiftyCam]: Cannot take photo. Capture session is not running")
             return
         }
 
-        if let videoConnection = photoFileOutput?.connection(with: AVMediaType.video) {
-            
-            photoFileOutput?.captureStillImageAsynchronously(from: videoConnection, completionHandler: {(sampleBuffer, error) in
-                if (sampleBuffer != nil) {
-                    let imageData = AVCaptureStillImageOutput.jpegStillImageNSDataRepresentation(sampleBuffer!)
-                    let image = self.processPhoto(imageData!)
-                    
-                    // Call delegate and return new image
-                    DispatchQueue.main.async {
-                        self.cameraDelegate?.swiftyCam(self, didTake: image)
-                    }
-                    completionHandler(true)
-                } else {
-                    completionHandler(false)
-                }
-            })
+        if (self.photoFileOutput?.connection(with: AVMediaType.video)) != nil {
+            self.photoFileOutput?.capturePhoto(with: self.settingsForPhoto(), delegate: self)
         } else {
-            completionHandler(false)
+            if let callback = self.onPhotoCaptureComplete {
+                callback(false)
+            }
         }
     }
     
@@ -940,9 +987,10 @@ extension SwiftyCamViewController {
     }
     
     @objc func openSettings() {
-        if #available(iOS 10.0, *) {
-            UIApplication.shared.openURL(URL(string: UIApplication.openSettingsURLString)!)
-        } else {
+        if #available(iOS 12.0, *) {
+            UIApplication.shared.open(URL(string: UIApplication.openSettingsURLString)!, options: [:], completionHandler: nil)
+        }
+        else {
             if let appSettings = URL(string: UIApplication.openSettingsURLString) {
                 UIApplication.shared.openURL(appSettings)
             }
@@ -993,18 +1041,6 @@ extension SwiftyCamViewController {
                 }
             }
             return avDevice[avDeviceNum]
-        }
-        return nil
-    }
-    
-    /// Enable or disable flash for photo
-    fileprivate func changeFlashSettings(device: AVCaptureDevice, mode: AVCaptureDevice.FlashMode) {
-        do {
-            try device.lockForConfiguration()
-            device.flashMode = mode
-            device.unlockForConfiguration()
-        } catch {
-            print("[SwiftyCam]: \(error)")
         }
     }
     
@@ -1091,7 +1127,7 @@ extension SwiftyCamViewController : AVCaptureFileOutputRecordingDelegate {
             }
         }
         if error != nil {
-            print("[SwiftyCam]: Movie file finishing error: \(error)")
+            print("[SwiftyCam]: Movie file finishing error: \(error!)")
             DispatchQueue.main.async {
                 self.cameraDelegate?.swiftyCam(self, didFailToRecordVideo: error!)
             }
@@ -1116,7 +1152,7 @@ extension SwiftyCamViewController {
             return
         }
         do {
-            let captureDevice = AVCaptureDevice.devices().first as? AVCaptureDevice
+            let captureDevice = AVCaptureDevice.devices().first
             try captureDevice?.lockForConfiguration()
 
             zoomScale = min(maxZoomScale, max(1.0, min(beginZoomScale * pinch.scale,  captureDevice!.activeFormat.videoMaxZoomFactor)))
