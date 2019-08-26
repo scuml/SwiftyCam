@@ -72,7 +72,7 @@ class Orientation  {
         case .portraitUpsideDown:
             return AVCaptureVideoOrientation.portraitUpsideDown
         @unknown default:
-            fatalError()
+            fatalError("Unknown Orientation Detected: \(UIApplication.shared.statusBarOrientation)")
         }
     }
     
