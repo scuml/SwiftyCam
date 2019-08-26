@@ -1,4 +1,9 @@
 # CHANGELOG
+## Version 3.1.0
+- Change build target from iOS 8 to iOS 12.4
+
+## Version 3.0.0
+- Change from Swift 3.2 to 5.0
 
 ## Version 2.6.0
 - Fixed issue with crashing during video recording

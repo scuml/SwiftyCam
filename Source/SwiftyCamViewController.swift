@@ -1152,7 +1152,12 @@ extension SwiftyCamViewController {
             return
         }
         do {
-            let captureDevice = AVCaptureDevice.devices().first
+            let discoverer = AVCaptureDevice.DiscoverySession(
+                deviceTypes: [.builtInTrueDepthCamera, .builtInDualCamera, .builtInWideAngleCamera, .builtInTelephotoCamera],
+                mediaType: .video,
+                position: .unspecified
+            )
+            let captureDevice = discoverer.devices.first // AVCaptureDevice.devices().first
             try captureDevice?.lockForConfiguration()
 
             zoomScale = min(maxZoomScale, max(1.0, min(beginZoomScale * pinch.scale,  captureDevice!.activeFormat.videoMaxZoomFactor)))
